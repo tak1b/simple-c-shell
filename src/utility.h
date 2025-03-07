@@ -7,34 +7,35 @@
  *
  * Description:
  *   This header file contains the implementations of the built-in shell commands and utility functions.
- *   It defines a structure for mapping command names to function pointers and implements functions
- *   for executing commands, handling I/O redirection, and supporting background execution.
+ *   In this version, we do not explicitly fork a child process. Instead, built-in commands are executed
+ *   directly in the main process, and external commands are executed via a system() call.
  */
 
  #ifndef UTILITY_H
  #define UTILITY_H
  
- #include "myshell.h"  // Include the shell header for shared definitions
+ #include "myshell.h"  // Include shared definitions
  
  // Structure that maps built-in command names to their corresponding functions
  struct command {
-     char* name;                    // Name of the built-in command (e.g., "clr", "dir")
-     void (*func)(char **args);     // Pointer to the function implementing the command
+     char* name;
+     void (*func)(char **args);
  };
  
- // Array of built-in commands with their associated function pointers
+ // Array of built-in commands with their function pointers
  struct command commands[] = {
-     {"clr", kShellClear},  // 'clr' command: clears the screen
-     {"dir", kShellDir},    // 'dir' command: lists directory contents
-     {"echo", kShellEcho},  // 'echo' command: prints text to the terminal
-     {"help", kShellHelp}   // 'help' command: displays the help manual
+     {"clr", kShellClear},   // Clears the terminal
+     {"dir", kShellDir},     // Lists directory contents
+     {"echo", kShellEcho},   // Prints text to the terminal
+     {"help", kShellHelp}    // Displays the help manual
  };
  
  /**
   * cmdLength:
-  *   Returns the total number of built-in commands available in the shell.
+  *   Returns the number of built-in commands available.
   *
-  * Returns: Integer count of built-in commands.
+  * Returns:
+  *   The count of built-in commands.
   */
  int cmdLength() {
      return sizeof(commands) / sizeof(struct command);
@@ -42,19 +43,23 @@
  
  /**
   * runBackground:
-  *   Scans the argument list for the "&" token, indicating that the command should be executed
-  *   in the background. If found, the "&" token is removed from the arguments.
+  *   Scans the command arguments for the background execution symbol "&".
+  *   If found, it removes the token from the argument list.
   *
   * args: Array of command arguments.
   *
-  * Returns: 1 if background execution is requested, 0 otherwise.
+  * Returns:
+  *   1 if "&" is found (indicating background execution), 0 otherwise.
+  *
+  * Note:
+  *   Background execution is not supported in this single-process mode.
   */
  int runBackground(char **args) {
      int i = 0;
      while (args[i] != NULL) {
          if (strcmp(args[i], "&") == 0) {
              args[i] = NULL;  // Remove the background token
-             return 1;        // Indicate background execution
+             return 1;
          }
          i++;
      }
@@ -63,129 +68,67 @@
  
  /**
   * executeExecute:
-  *   Executes the provided command after checking for input/output redirection operators.
-  *   It forks a child process in which the command is executed. If the command is built-in,
-  *   its corresponding function is invoked; otherwise, execvp is used to run external commands.
+  *   Executes the given command without explicitly forking a child process.
+  *   If the command is built-in (e.g., clr, dir, echo, help), its function is called directly.
+  *   Otherwise, the command is assembled into a single string and executed using system().
   *
   * args: Array of command arguments.
-  * bg: Flag for background execution (1 for background, 0 for foreground).
+  * bg: Background execution flag (ignored in this mode; a warning is printed if set).
   */
  void executeExecute(char **args, int bg) {
-     int inputRed = 0;    // Flag for input redirection
-     int outputRed = 0;   // Flag for output redirection (overwrite mode)
-     int appendRed = 0;   // Flag for output redirection (append mode)
-     char *input_file = NULL;   // Filename for input redirection
-     char *outputFile = NULL;   // Filename for output redirection
-     
-     // Count the number of arguments provided
-     int count = 0;
-     while (args[count] != NULL) {
-         count++;
+     // Warn if background execution is requested since it is not supported.
+     if (bg == 1) {
+         printf("Warning: Background execution not supported in single-process mode. Running in foreground.\n");
      }
      
-     // Scan arguments for redirection operators and set flags accordingly
-     for (int i = 0; i < count; i++) {
-         if (strcmp(args[i], "<") == 0) {
-             inputRed = 1;
-             input_file = args[i + 1];  // Next argument is the input file name
-             args[i] = NULL;            // Remove operator from arguments
-         } else if (strcmp(args[i], ">") == 0) {
-             outputRed = 1;
-             outputFile = args[i + 1];  // Next argument is the output file name
-             args[i] = NULL;            // Remove operator from arguments
-         } else if (strcmp(args[i], ">>") == 0) {
-             appendRed = 1;
-             outputFile = args[i + 1];  // Next argument is the output file name
-             args[i] = NULL;            // Remove operator from arguments
+     // Check for a built-in command match
+     int found = 0;
+     for (int i = 0; i < cmdLength(); i++) {
+         if (strcmp(args[0], commands[i].name) == 0) {
+             commands[i].func(args);  // Execute the built-in command
+             found = 1;
+             break;
          }
      }
      
-     // Fork a child process to execute the command
-     pid_t pid = fork();
-     if (pid == -1) {
-         perror("Fork failed");
-         exit(EXIT_FAILURE);
-     }
-     
-     if (pid == 0) {  // Child process
-         // Handle input redirection if specified
-         if (inputRed) {
-             int fd = open(input_file, O_RDONLY);
-             if (fd == -1) {
-                 perror("Failed to open input file");
-                 exit(EXIT_FAILURE);
-             }
-             if (dup2(fd, STDIN_FILENO) == -1) {
-                 perror("Duplication of file descriptor failed");
-                 exit(EXIT_FAILURE);
-             }
-             close(fd);  // Close file descriptor after redirection
-         }
-         
-         // Handle output redirection if specified
-         if (outputRed || appendRed) {
-             int flags = O_WRONLY | O_CREAT;
-             flags |= (appendRed) ? O_APPEND : O_TRUNC;  // Set appropriate flag
-             int fd = open(outputFile, flags, 0644);
-             if (fd == -1) {
-                 perror("Failed to open output file");
-                 exit(EXIT_FAILURE);
-             }
-             if (dup2(fd, STDOUT_FILENO) == -1) {
-                 perror("Duplication of file descriptor failed");
-                 exit(EXIT_FAILURE);
-             }
-             close(fd);  // Close file descriptor after redirection
-         }
-         
-         // Check if the command is a built-in command and execute it if so
-         for (int i = 0; i < cmdLength(); i++) {
-             if (strcmp(args[0], commands[i].name) == 0) {
-                 commands[i].func(args);  // Call the built-in function
-                 exit(EXIT_SUCCESS);      // Exit child process after execution
+     if (!found) {
+         // Assemble the external command as a single string
+         char commandLine[1024] = "";
+         for (int i = 0; args[i] != NULL; i++) {
+             strcat(commandLine, args[i]);
+             if (args[i + 1] != NULL) {
+                 strcat(commandLine, " ");
              }
          }
-         
-         // For non-built-in commands, execute the external command using execvp
-         execvp(args[0], args);
-         // If execvp returns, an error occurred
-         perror("Execution error");
-         exit(EXIT_FAILURE);
-     } else {  // Parent process
-         int status;
-         if (bg == 1) {
-             // For background processes, print the process ID and wait for it (non-blocking)
-             printf("Process [%d]\n", pid);
-             waitpid(pid, &status, WUNTRACED);
-         } else {
-             // For foreground processes, wait until the child process terminates
-             do {
-                 if (waitpid(pid, &status, WUNTRACED) == -1) {
-                     perror("An error occurred when waiting for process");
-                     exit(EXIT_FAILURE);
-                 }
-             } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+         // Execute the external command using system()
+         int ret = system(commandLine);
+         if (ret == -1) {
+             perror("System call failed");
          }
      }
  }
  
  /**
   * kShellHelp:
-  *   Displays the help manual to the user. It changes the current directory to locate the
-  *   manual file (readme.md) and then invokes the system's "more" command to display it.
+  *   Displays the help manual using the system's "more" command.
+  *   Changes directory into the "manual" folder to locate the "readme.md" file,
+  *   then displays it. Does not exit the shell.
   *
-  * args: Array of command arguments (unused in this function).
+  * args: Array of command arguments (unused).
   */
  void kShellHelp(char **args) {
-     // Change directory to one level up, then to the "manual" folder
-     chdir("..");
-     chdir("manual");
-     // Use the "more" command with the -p flag to paginate the readme.md file
-     system("more -p readme.md");
-     printf("\n\n");
-     // Exit the child process after displaying the help manual
-     exit(1);
- }
+    printf("\nMy Shell Help Manual\n");
+    printf("--------------------\n");
+    printf("cd [directory]   : Change the current directory. If no directory is provided, displays the current working directory.\n");
+    printf("clr              : Clear the terminal screen.\n");
+    printf("dir [directory]  : List the contents of a directory. If no directory is specified, lists the current directory.\n");
+    printf("environ          : Display all environment variables.\n");
+    printf("echo [text]      : Display the provided text on the screen.\n");
+    printf("help             : Display this help information.\n");
+    printf("pause            : Pause the shell until Enter is pressed.\n");
+    printf("quit             : Exit the shell.\n\n");
+}
+
  
  /**
   * kShellClear:
@@ -200,59 +143,50 @@
  
  /**
   * kShellEcho:
-  *   Prints the provided text to the terminal. It skips the command name ("echo") and
-  *   prints the remaining arguments.
+  *   Prints the provided text arguments to the terminal.
   *
-  * args: Array of command arguments.
+  * args: Array of command arguments; args[0] is "echo" and subsequent elements are text.
   */
  void kShellEcho(char **args) {
-     // Set the text color to cyan for output
-     printf("%s", CYN);
-     // Start printing arguments from the second element
-     char **arg = args + 1;
+     printf("%s", CYN);  // Set output color to cyan
+     char **arg = args + 1;  // Skip the command name
      while (*arg) {
          printf("%s ", *arg);
          arg++;
      }
-     // Reset the text color and print a newline
-     printf("%s\n", WHT);
+     printf("%s\n", WHT);  // Reset output color and add newline
  }
  
  /**
   * kShellCD:
-  *   Changes the current working directory. If no argument is provided, changes to the
-  *   home directory. Optionally, it lists the contents of the new directory.
+  *   Changes the current working directory. If no directory is specified,
+  *   it changes to the home directory and then lists the directory contents.
   *
   * args: Array of command arguments.
   */
  void kShellCD(char **args) {
      if (args[1] == NULL) {
-         // If no directory is specified, change to the home directory
          chdir(getenv("HOME"));
      } else {
-         // Change to the directory provided in args[1]
          chdir(args[1]);
      }
-     // Optionally, list the directory contents to confirm the change
      system("ls");
      printf("%s", WHT);
  }
  
  /**
   * kShellDir:
-  *   Lists the contents of a directory by constructing an "ls -al" command.
-  *   If an argument is provided, that directory is listed; otherwise, the current directory is listed.
+  *   Lists the contents of a directory. If an argument is provided,
+  *   that directory is listed; otherwise, the current directory is used.
   *
   * args: Array of command arguments.
   */
  void kShellDir(char **args) {
-     char input[100] = "ls -al ";  // Base command for detailed directory listing
+     char input[100] = "ls -al ";  // Base command for detailed listing
      if (args[1]) {
-         // Append the specified directory to the command string
-         strcat(input, args[1]);
+         strcat(input, args[1]);  // Append the specified directory if provided
      }
-     // Execute the command using the system() call
-     system(input);
+     system(input);  // Execute the directory listing command
  }
  
  #endif  // End of UTILITY_H

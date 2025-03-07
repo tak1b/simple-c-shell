@@ -8,8 +8,9 @@
  * Description:
  *   This file contains the main function and command processing loop for the Custom C Shell.
  *   It supports both interactive mode and batch mode (reading commands from a file). The shell
- *   displays a prompt with the current working directory and processes built-in commands such
- *   as cd, clr, dir, environ, echo, help, pause, and quit.
+ *   displays a prompt with the current working directory and processes built-in commands.
+ *   In this update, if the "cd" command is issued without an argument, it simply prints the
+ *   current working directory.
  */
 
  #include "myshell.h"      // Include header with macros and function prototypes
@@ -48,7 +49,7 @@
  
          // Main interactive loop: read commands until end-of-file (Ctrl-D) or "quit" command
          while (!feof(stdin)) {
-             // If dontShowPrompt is not set, display the prompt
+             // Display the prompt if needed
              if (dontShowPrompt == 1) {
                  dontShowPrompt = 0;
              } else {
@@ -71,7 +72,7 @@
                      // Check for background execution symbol ("&")
                      int background = runBackground(args);
  
-                     // Handle built-in commands by comparing first token
+                     // Process built-in commands using string comparisons
                      if (!strcmp(args[0],"pause")) {
                          // For "pause", wait for the user to press Enter
                          printf("Pausing, press enter to continue\n\n");
@@ -87,20 +88,21 @@
                          // For "quit", exit the shell loop
                          break;
                      } else if (!strcmp(args[0],"cd")) {
-                         // For "cd", change the current directory
+                         // If cd is given without an argument, print the current directory (pwd)
                          if (args[1] == NULL) {
-                             // No directory provided; change to the home directory
-                             if (chdir(getenv("HOME")) != 0) {
-                                 perror("chdir failed");
+                             if (getcwd(cwd, sizeof(cwd)) != NULL) {
+                                 printf("%s\n", cwd);
+                             } else {
+                                 perror("getcwd failed");
                              }
                          } else {
-                             // Change to the directory specified in args[1]
+                             // Otherwise, attempt to change to the specified directory
                              if (chdir(args[1]) != 0) {
                                  perror("chdir failed");
                              }
                          }
                      } else {
-                         // For other commands, execute them via the executeExecute function
+                         // For any other command, execute using the executeExecute function
                          if (background == 1) {
                              executeExecute(args, background);
                          } else {
@@ -157,9 +159,12 @@
                  } else if (!strcmp(tokens[0],"quit")) {
                      break;
                  } else if (!strcmp(tokens[0],"cd")) {
+                     // In batch mode, if cd has no argument, print the current directory
                      if (tokens[1] == NULL) {
-                         if (chdir(getenv("HOME")) != 0) {
-                             perror("chdir failed");
+                         if (getcwd(cwd, sizeof(cwd)) != NULL) {
+                             printf("%s\n", cwd);
+                         } else {
+                             perror("getcwd failed");
                          }
                      } else {
                          if (chdir(tokens[1]) != 0) {
@@ -167,7 +172,6 @@
                          }
                      }
                  } else {
-                     // Execute any other command
                      executeExecute(tokens, background);
                  }
              }
@@ -180,6 +184,6 @@
          // Close the batch file after processing all commands
          fclose(file);
      }
-     return 0;  // End the shell with a successful exit status
+     return 0;  // Exit the shell successfully
  }
  
