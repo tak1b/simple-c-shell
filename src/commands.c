@@ -8,8 +8,7 @@
  * Description:
  *   This file contains implementations for the built-in commands and utility functions used by the shell.
  *   It handles commands such as "clr", "clear", "dir", "echo", "help", and "cd". The "clear" command is
- *   implemented using ANSI escape codes to clear the screen and then reprint the prompt (showing the current
- *   working directory) so that the user information remains visible immediately after clearing.
+ *   implemented using ANSI escape codes to clear the screen. Prompt reprinting is handled in myshell.c.
  *
  *   The method for clearing the console using ANSI escape codes is based on an article from GeeksforGeeks:
  *   "Clear the console in C language" (https://www.geeksforgeeks.org/clear-console-c-language/).
@@ -20,14 +19,13 @@
 
  #include "commands.h"
  #include <unistd.h>  // For getcwd()
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
  
  // ---------------------------------------------------------------------------
  // Static Built-in Command Array
  // ---------------------------------------------------------------------------
- /*
-  * The static array "commands" maps built-in command names to their corresponding functions.
-  * This array is used in executeExecute() to determine if a command should be handled as built-in.
-  */
  static struct command {
      char* name;                 // Name of the command (e.g., "clr", "dir")
      void (*func)(char **args);  // Function pointer to the command's implementation
@@ -42,17 +40,18 @@
   * cmdLength:
   *   Returns the number of built-in commands in the commands array.
   */
- static int cmdLength() {
+ /*
+  static int cmdLength() {
      return sizeof(commands) / sizeof(commands[0]);
  }
- 
+ */
+
  // ---------------------------------------------------------------------------
  // Additional Function: check_cmd
  // ---------------------------------------------------------------------------
  /**
   * check_cmd:
-  *   Checks if the command entered by the user is "clear". If so, it clears the screen using ANSI escape codes
-  *   and then reprints the prompt (which includes the current working directory) so that user info remains visible.
+  *   Checks if the command entered by the user is "clear". If so, it clears the screen using ANSI escape codes.
   *
   *   The ANSI escape sequence "\e[1;1H\e[2J" moves the cursor to the top-left corner and clears the screen.
   *   This technique is based on the article "Clear the console in C language" from GeeksforGeeks:
@@ -67,23 +66,10 @@
  int check_cmd(char **args) {
      if (!strcmp(args[0], "clear")) {
          // Clear the screen using ANSI escape codes.
-         // "\e[1;1H" moves the cursor to row 1, column 1.
-         // "\e[2J" clears the entire screen.
-         printf("\e[1;1H\e[2J");  // Source: https://www.geeksforgeeks.org/clear-console-c-language/
- 
-         // Retrieve the current working directory so we can reprint the prompt.
-         char cwd[512];
-         if (getcwd(cwd, sizeof(cwd)) != NULL) {
-             // Reprint the prompt with current directory info.
-             // Format: "MS <current_directory> $~ "
-             printf("MS %s $~ ", cwd);
-         } else {
-             perror("getcwd failed");
-             printf("MS $~ ");
-         }
+         printf("\e[1;1H\e[2J");
          return 1;  // Command handled
      }
-     return 0;  // Not the "clear" command
+     return 0;      // Not the "clear" command
  }
  
  // ---------------------------------------------------------------------------
@@ -127,42 +113,51 @@
   * Note:
   *   Background execution is not supported in this single-process implementation.
   */
- void executeExecute(char **args, int bg) {
-     // First, check if the command is "clear" and handle it.
-     if (check_cmd(args)) {
-         return;
-     }
- 
-     // Warn the user if background execution is requested.
-     if (bg == 1) {
-         printf("Warning: Background execution not supported in single-process mode. Running in foreground.\n");
-     }
- 
-     // Check if the command matches any built-in command.
-     int found = 0;
-     for (int i = 0; i < cmdLength(); i++) {
-         if (!strcmp(args[0], commands[i].name)) {
-             commands[i].func(args);  // Execute the built-in command function.
-             found = 1;
-             break;
-         }
-     }
- 
-     // If the command is not built-in, assemble it into a string and execute it externally using system().
-     if (!found) {
-         char commandLine[1024] = "";
-         for (int i = 0; args[i] != NULL; i++) {
-             strcat(commandLine, args[i]);
-             if (args[i + 1] != NULL) {
-                 strcat(commandLine, " ");
-             }
-         }
-         int ret = system(commandLine);
-         if (ret == -1) {
-             perror("system() failed");
-         }
-     }
- }
+/**
+ * executeExecute:
+ *   Executes a command, supporting built-in, external, I/O redirection, and background execution.
+ *
+ * Parameters:
+ *   args: Tokenized command-line arguments.
+ *   bg: Background execution flag.
+ */
+void executeExecute(char **args, int bg) {
+    if (args[0] == NULL) return;
+
+    if (check_cmd(args)) return;
+
+    // Handle internal commands with redirection
+    for (int i = 0; i < sizeof(commands)/sizeof(commands[0]); i++) {
+        if (!strcmp(args[0], commands[i].name)) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                handleRedirection(args);         // Apply I/O redirection
+                commands[i].func(args);          // Execute internal command
+                exit(0);                         // Exit child process
+            } else {
+                waitpid(pid, NULL, 0);           // Wait for child
+            }
+            return;
+        }
+    }
+
+    // External command execution
+    pid_t pid = fork();
+    if (pid == 0) {
+        setenv("parent", getenv("shell"), 1);
+        handleRedirection(args);                 // Apply I/O redirection
+        if (execvp(args[0], args) == -1) {
+            perror("execvp failed");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        if (!bg) {
+            waitpid(pid, NULL, 0);               // Wait for foreground process
+        } else {
+            printf("Background process started with PID %d\n", pid);
+        }
+    }
+}
  
  // ---------------------------------------------------------------------------
  // Built-in Command Implementations
@@ -175,18 +170,11 @@
   *   args: Tokenized command-line arguments (unused in this function).
   */
  void kShellHelp(char **args) {
-     printf("\nMy Shell Help Manual\n");
-     printf("--------------------\n");
-     printf("cd [directory]   : Change the current directory. If no directory is provided, displays the current directory.\n");
-     printf("clr              : Clear the terminal screen (using system(\"clear\")).\n");
-     printf("clear            : Clear the terminal screen (using ANSI escape codes, see check_cmd function).\n");
-     printf("dir [directory]  : List the contents of a directory.\n");
-     printf("environ          : Display all environment variables.\n");
-     printf("echo [text]      : Display the provided text on the screen.\n");
-     printf("help             : Display this help information.\n");
-     printf("pause            : Pause the shell until Enter is pressed.\n");
-     printf("quit             : Exit the shell.\n\n");
- }
+    int ret = system("more ../manual/readme.txt");
+    if (ret == -1) {
+        perror("Failed to open help file using more");
+    }
+}
  
  /**
   * kShellClear:
@@ -200,7 +188,6 @@
   */
  void kShellClear(char **args) {
      system("clear");
-     printf("Cleared shell (via system(\"clear\"))\n");
  }
  
  /**
@@ -212,11 +199,13 @@
   *   args: Tokenized command-line arguments.
   */
  void kShellDir(char **args) {
-     char input[100] = "ls -al ";
+     char command[256];
      if (args[1]) {
-         strcat(input, args[1]);
+         snprintf(command, sizeof(command), "ls -al %s", args[1]);
+     } else {
+         snprintf(command, sizeof(command), "ls -al");
      }
-     system(input);
+     system(command);
  }
  
  /**
@@ -261,3 +250,30 @@
      }
  }
  
+ /**
+ * handleRedirection:
+ *   Handles input/output redirection symbols (<, >, >>) in the command arguments.
+ */
+void handleRedirection(char **args) {
+    for (int i = 0; args[i] != NULL; i++) {
+        if (strcmp(args[i], "<") == 0) {
+            int fd = open(args[i+1], O_RDONLY);
+            if (fd < 0) { perror("Input file error"); exit(1); }
+            dup2(fd, STDIN_FILENO);
+            close(fd);
+            args[i] = NULL;
+        } else if (strcmp(args[i], ">") == 0) {
+            int fd = open(args[i+1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) { perror("Output file error"); exit(1); }
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+            args[i] = NULL;
+        } else if (strcmp(args[i], ">>") == 0) {
+            int fd = open(args[i+1], O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (fd < 0) { perror("Append file error"); exit(1); }
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+            args[i] = NULL;
+        }
+    }
+}

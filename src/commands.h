@@ -33,7 +33,8 @@
   * These help with processing background tokens and executing commands.
   */
  int runBackground(char **args);  // Checks for "&" and returns a flag
- void executeExecute(char **args, int bg);  // Executes the given command (built-in or external)
+ void executeExecute(char **args, int bg);
+void handleRedirection(char **args);  // Executes the given command (built-in or external)
  
  #endif // COMMANDS_H
  
